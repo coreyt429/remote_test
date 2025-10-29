@@ -12,7 +12,7 @@ from celery_app import celery_app as celery
 app = Flask(__name__)
 VERSION=0.03
 
-@app.get("/")
+@app.get("/tasks")
 def list_task_names() -> tuple[dict, int]:
     """
     Returns a list of registered Celery task names (dotted names).
@@ -56,7 +56,7 @@ def list_task_names() -> tuple[dict, int]:
     }), 200
 
 
-@app.get("/version")
+@app.get("/")
 def version() -> tuple[dict, int]:
     return jsonify({"ve_remote_test": VERSION}), 200
 
