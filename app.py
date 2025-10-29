@@ -10,10 +10,56 @@ from celery_app import celery_app as celery
 # from celery_app import celery
 
 app = Flask(__name__)
+VERSION=0.03
 
 @app.get("/")
+def list_task_names() -> tuple[dict, int]:
+    """
+    Returns a list of registered Celery task names (dotted names).
+
+    Strategy:
+      1) Prefer asking live workers via celery.control.inspect().registered()
+      2) Fallback to tasks registered in this process: celery.tasks
+    Filters out Celery builtin tasks (celery.*).
+    """
+    task_names: list[str] = []
+
+    # 1) Ask live workers for their registered tasks (most accurate)
+    try:
+        insp = celery.control.inspect(timeout=2.0)
+        registered = insp.registered() or {}  # {worker_node: [task1, task2, ...]}
+        if isinstance(registered, dict):
+            seen = set()
+            for _worker, names in registered.items():
+                for name in (names or []):
+                    if isinstance(name, str) and not name.startswith("celery."):
+                        seen.add(name)
+            task_names = sorted(seen)
+    except Exception:
+        # Ignore and try local fallback below
+        pass
+
+    # 2) Fallback to locally known tasks (may be empty if tasks aren't imported here)
+    if not task_names:
+        try:
+            # celery.tasks is a registry mapping task_name -> Task
+            task_names = sorted(
+                n for n in celery.tasks.keys()
+                if isinstance(n, str) and not n.startswith("celery.")
+            )
+        except Exception:
+            task_names = []
+
+    return jsonify({
+        "task_names": task_names,
+        "count": len(task_names),
+    }), 200
+
+
+@app.get("/version")
 def version() -> tuple[dict, int]:
-    return jsonify({"vetest": 0.02}), 200
+    return jsonify({"ve_remote_test": VERSION}), 200
+
 
 
 @app.post("/task")
