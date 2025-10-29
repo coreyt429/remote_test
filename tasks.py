@@ -183,12 +183,56 @@ def _http_get(
 ) -> Dict[str, Any]:
     """
     Perform a GET and return a compact result dict without raising.
+
+    Returns:
+      {
+        "ok": bool,
+        "status": int | None,
+        "error": str | None,
+        "duration": float | None,     # total wall-clock seconds for the call
+        "ttfb": float | None,         # time-to-first-byte of final response
+        "ttfb_total": float | None,   # sum of TTFB across redirect chain
+        "bytes": int | None,          # response body size in bytes (if downloaded)
+        "url": str | None,            # final URL after redirects
+      }
     """
+    start = time.perf_counter()
     try:
         r = requests.get(url, timeout=timeout, auth=auth, verify=verify_ssl)
-        return {"ok": r.status_code == 200, "status": r.status_code, "error": None}
+        total = time.perf_counter() - start
+
+        # Time to first byte for the final response:
+        ttfb = r.elapsed.total_seconds() if r is not None else None
+
+        # Sum TTFB across redirects + final response:
+        chain = list(getattr(r, "history", [])) + [r]
+        ttfb_total = sum((resp.elapsed.total_seconds() for resp in chain if resp is not None), 0.0)
+
+        # Bytes downloaded (requests downloads content by default unless stream=True)
+        size = len(r.content) if r.content is not None else 0
+
+        return {
+            "ok": r.status_code == 200,
+            "status": r.status_code,
+            "error": None,
+            "duration": total,
+            "ttfb": ttfb,
+            "ttfb_total": ttfb_total,
+            "bytes": size,
+            "url": r.url,
+        }
     except requests.RequestException as exc:
-        return {"ok": False, "status": None, "error": f"{type(exc).__name__}: {exc}"}
+        total = time.perf_counter() - start
+        return {
+            "ok": False,
+            "status": None,
+            "error": f"{type(exc).__name__}: {exc}",
+            "duration": total,   # still report how long until failure
+            "ttfb": None,
+            "ttfb_total": None,
+            "bytes": None,
+            "url": url,
+        }
 
 
 def _apptest_dms(
