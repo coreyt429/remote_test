@@ -4,7 +4,7 @@ import sys
 import requests
 
 BASE_URL = "http://vetest01.mymtm.us"
-POST_TASK_URL = f"{BASE_URL}/task"          # POST here
+POST_TASK_URL = f"{BASE_URL}/task"  # POST here
 GET_TASK_URL = f"{BASE_URL}/task/{{task_id}}"  # GET here
 
 # sample payload (your example)
@@ -28,6 +28,7 @@ dns_data = {
     },
 }
 
+
 def submit_task(session: requests.Session, data: dict) -> str:
     """Submit the DNS check task and return task_id."""
     payload = {
@@ -46,7 +47,13 @@ def submit_task(session: requests.Session, data: dict) -> str:
         raise RuntimeError(f"Unexpected response from server: {resp}")
     return task_id
 
-def wait_for_task(session: requests.Session, task_id: str, timeout_s: int = 120, poll_interval: float = 1.0) -> dict:
+
+def wait_for_task(
+    session: requests.Session,
+    task_id: str,
+    timeout_s: int = 120,
+    poll_interval: float = 1.0,
+) -> dict:
     """Poll the task status until finished or timeout. Returns final JSON payload."""
     deadline = time.time() + timeout_s
     last_state = None
@@ -63,6 +70,7 @@ def wait_for_task(session: requests.Session, task_id: str, timeout_s: int = 120,
         time.sleep(poll_interval)
     raise TimeoutError(f"Task {task_id} did not finish within {timeout_s}s")
 
+
 def print_result(payload: dict) -> None:
     """Pretty-print SUCCESS/FAILURE result from the API."""
     state = payload.get("state")
@@ -75,7 +83,9 @@ def print_result(payload: dict) -> None:
     summary = result.get("summary", {})
     results = result.get("results", {})
 
-    print(f"\nSummary: domains={summary.get('domains')} duration={summary.get('duration_sec')}s")
+    print(
+        f"\nSummary: domains={summary.get('domains')} duration={summary.get('duration_sec')}s"
+    )
     for domain, info in results.items():
         # If task was run with include_text=True, server includes a 'text' string per domain
         line = info.get("text")
@@ -83,7 +93,10 @@ def print_result(payload: dict) -> None:
             print(line)
         else:
             # fallback if text omitted
-            print(f"{domain}: state={info.get('state')} retrieved={info.get('retrieved')}")
+            print(
+                f"{domain}: state={info.get('state')} retrieved={info.get('retrieved')}"
+            )
+
 
 def main() -> int:
     with requests.Session() as sess:
@@ -97,6 +110,6 @@ def main() -> int:
             print(f"Error: {e}", file=sys.stderr)
             return 1
 
+
 if __name__ == "__main__":
     raise SystemExit(main())
-

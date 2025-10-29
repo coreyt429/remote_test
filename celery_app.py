@@ -2,6 +2,7 @@
 import os
 from celery import Celery
 
+
 def make_celery() -> Celery:
     redis_url = os.getenv("REDIS_URL", "redis://systemd-redis:6379/0")
     app = Celery(
@@ -20,5 +21,5 @@ def make_celery() -> Celery:
     )
     return app
 
-celery_app = make_celery()
 
+celery_app = make_celery()

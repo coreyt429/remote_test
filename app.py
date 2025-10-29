@@ -10,7 +10,8 @@ from celery_app import celery_app as celery
 # from celery_app import celery
 
 app = Flask(__name__)
-VERSION=0.03
+VERSION = 0.03
+
 
 @app.get("/tasks")
 def list_task_names() -> tuple[dict, int]:
@@ -31,7 +32,7 @@ def list_task_names() -> tuple[dict, int]:
         if isinstance(registered, dict):
             seen = set()
             for _worker, names in registered.items():
-                for name in (names or []):
+                for name in names or []:
                     if isinstance(name, str) and not name.startswith("celery."):
                         seen.add(name)
             task_names = sorted(seen)
@@ -44,22 +45,24 @@ def list_task_names() -> tuple[dict, int]:
         try:
             # celery.tasks is a registry mapping task_name -> Task
             task_names = sorted(
-                n for n in celery.tasks.keys()
+                n
+                for n in celery.tasks.keys()
                 if isinstance(n, str) and not n.startswith("celery.")
             )
         except Exception:
             task_names = []
 
-    return jsonify({
-        "task_names": task_names,
-        "count": len(task_names),
-    }), 200
+    return jsonify(
+        {
+            "task_names": task_names,
+            "count": len(task_names),
+        }
+    ), 200
 
 
 @app.get("/")
 def version() -> tuple[dict, int]:
     return jsonify({"ve_remote_test": VERSION}), 200
-
 
 
 @app.post("/task")
@@ -98,7 +101,11 @@ def enqueue_task():
         args = data.get("args", []) or []
         kwargs = data.get("kwargs", {}) or {}
         if not isinstance(args, list) or not isinstance(kwargs, dict):
-            return jsonify({"error": "'data.args' must be a list and 'data.kwargs' must be an object"}), 400
+            return jsonify(
+                {
+                    "error": "'data.args' must be a list and 'data.kwargs' must be an object"
+                }
+            ), 400
     elif data is not None:
         # Pass `data` as a single positional argument
         args = [data]
@@ -120,7 +127,7 @@ def task_status(task_id: str):
     # Standard fields
     payload = {
         "task_id": task_id,
-        "state": res.state,              # PENDING / STARTED / RETRY / FAILURE / SUCCESS
+        "state": res.state,  # PENDING / STARTED / RETRY / FAILURE / SUCCESS
         "ready": res.ready(),
     }
 
@@ -141,4 +148,3 @@ def task_status(task_id: str):
 if __name__ == "__main__":
     # In production you’re already running this under Gunicorn.
     app.run(host="0.0.0.0", port=8000)
-

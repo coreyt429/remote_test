@@ -1,4 +1,8 @@
-# /home/ubuntu/api/tasks.py
+"""
+/home/ubuntu/api/tasks.py
+Celery tasks for remote tests
+"""
+
 from __future__ import annotations
 from typing import Dict, List, Any, Tuple, Optional
 import time
@@ -7,20 +11,23 @@ import socket
 import ssl
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import dns.resolver
 import xml.etree.ElementTree as ET
+import dns.resolver
 import requests
 from celery import shared_task
+from oci import Oci
 
 
-def _resolve_records(domain: str, record_type: str, timeout: float) -> Tuple[List[str], str | None]:
+def _resolve_records(
+    domain: str, record_type: str, timeout: float
+) -> Tuple[List[str], str | None]:
     """Resolve A or SRV records for domain. Returns (records, error_message)."""
     resolver = dns.resolver.Resolver()
     resolver.lifetime = timeout
     resolver.timeout = timeout
     try:
         answers = resolver.resolve(domain, record_type)
-    except Exception as exc:  # broad by design—we return the error text
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         return [], f"{type(exc).__name__}: {exc}"
 
     out: List[str] = []
@@ -64,7 +71,9 @@ def _classify_state(retrieved: List[str], records: Dict[str, List[str]]) -> str:
     return "unknown"
 
 
-def _render_line(domain: str, record_type: str, state: str, retrieved: List[str], error: str | None) -> str:
+def _render_line(
+    domain: str, record_type: str, state: str, retrieved: List[str], error: str | None
+) -> str:
     """Human-readable single-block text akin to the original prints (no colors)."""
     if error:
         return f"Error querying {record_type} records for {domain}: {error}"
@@ -72,12 +81,13 @@ def _render_line(domain: str, record_type: str, state: str, retrieved: List[str]
         return f"{domain}: is in state unknown {sorted(retrieved)}"
     if state == "original":
         return f"{domain}: is in state original"
-    return f"{domain}: is in state {state}" + (f" {sorted(retrieved)}" if record_type == "A" else "")
+    return f"{domain}: is in state {state}" + (
+        f" {sorted(retrieved)}" if record_type == "A" else ""
+    )
 
 
-@shared_task(name="dns.check_records", bind=True)
+@shared_task(name="dns.check_records")
 def check_records(
-    self,
     dns_data: Dict[str, Dict[str, List[str]]],
     timeout: float = 3.0,
     include_text: bool = True,
@@ -115,7 +125,11 @@ def check_records(
 
         if err:
             state = "unknown"
-            text = _render_line(domain, record_type, state, [], err) if include_text else None
+            text = (
+                _render_line(domain, record_type, state, [], err)
+                if include_text
+                else None
+            )
             results[domain] = {
                 "record_type": record_type,
                 "retrieved": [],
@@ -126,7 +140,11 @@ def check_records(
             continue
 
         state = _classify_state(retrieved, records)
-        text = _render_line(domain, record_type, state, retrieved, None) if include_text else None
+        text = (
+            _render_line(domain, record_type, state, retrieved, None)
+            if include_text
+            else None
+        )
         results[domain] = {
             "record_type": record_type,
             "retrieved": sorted(retrieved),
@@ -136,32 +154,33 @@ def check_records(
         }
 
     return {
-        "summary": {"domains": len(dns_data), "duration_sec": round(time.time() - started, 2)},
+        "summary": {
+            "domains": len(dns_data),
+            "duration_sec": round(time.time() - started, 2),
+        },
         "results": results,
     }
 
-
-
-# Optional OCI import, guarded so the task still runs if Oci isn't installed
-try:
-    from oci import Oci  # type: ignore
-    HAVE_OCI = True
-except Exception:
-    Oci = None  # type: ignore
-    HAVE_OCI = False
 
 # Optional zeep import (OCI-over-SOAP). We guard it too.
 try:
     from zeep import Client, Settings  # type: ignore
     from zeep.transports import Transport  # type: ignore
+
     HAVE_ZEEP = True
-except Exception:
-    Client = Settings = Transport = None  # type: ignore
+except Exception:  # pylint: disable=broad-exception-caught
+    Client = Settings = Transport = None  # pylint: disable=invalid-name
     HAVE_ZEEP = False
 
 
 # ---------- helpers ----------
-def _http_get(url: str, *, timeout: float, auth: Optional[Tuple[str, str]] = None, verify_ssl: bool = True) -> Dict[str, Any]:
+def _http_get(
+    url: str,
+    *,
+    timeout: float,
+    auth: Optional[Tuple[str, str]] = None,
+    verify_ssl: bool = True,
+) -> Dict[str, Any]:
     """
     Perform a GET and return a compact result dict without raising.
     """
@@ -172,7 +191,9 @@ def _http_get(url: str, *, timeout: float, auth: Optional[Tuple[str, str]] = Non
         return {"ok": False, "status": None, "error": f"{type(exc).__name__}: {exc}"}
 
 
-def _apptest_dms(hostname: str, test_data: Dict[str, Any], *, timeout: float, verify_ssl: bool) -> Dict[str, Any]:
+def _apptest_dms(
+    hostname: str, test_data: Dict[str, Any], *, timeout: float, verify_ssl: bool
+) -> Dict[str, Any]:
     dms_url = test_data.get("dms_url")
     if not dms_url:
         return {"ok": False, "error": "Missing test_data.dms_url", "details": {}}
@@ -183,68 +204,113 @@ def _apptest_dms(hostname: str, test_data: Dict[str, Any], *, timeout: float, ve
     http_res = _http_get(http_url, timeout=timeout, verify_ssl=verify_ssl)
     https_res = _http_get(https_url, timeout=timeout, verify_ssl=verify_ssl)
     ok = http_res["ok"] or https_res["ok"]
-    return {"ok": ok, "error": None if ok else "DMS check failed", "details": {"http": http_res, "https": https_res}}
+    return {
+        "ok": ok,
+        "error": None if ok else "DMS check failed",
+        "details": {"http": http_res, "https": https_res},
+    }
 
 
-def _apptest_xsi_actions(hostname: str, test_data: Dict[str, Any], *, timeout: float, verify_ssl: bool) -> Dict[str, Any]:
+def _apptest_xsi_actions(
+    hostname: str, test_data: Dict[str, Any], *, timeout: float, verify_ssl: bool
+) -> Dict[str, Any]:
     user_id = test_data.get("user_id")
     password = test_data.get("password")
     if not user_id or not password:
-        return {"ok": False, "error": "Missing user_id/password in test_data", "details": {}}
+        return {
+            "ok": False,
+            "error": "Missing user_id/password in test_data",
+            "details": {},
+        }
 
-    base1 = f"com.broadsoft.xsi-actions/v2.0/user/{user_id}/profile"
-    base2 = f"com.broadsoft.xsi-actions/v2.0/user/{user_id}/calls"
+    test_cases = {
+        "profile": f"com.broadsoft.xsi-actions/v2.0/user/{user_id}/profile",
+        "calls": f"com.broadsoft.xsi-actions/v2.0/user/{user_id}/calls",
+    }
 
     results = {}
-    for label, rel in (("profile", base1), ("calls", base2)):
-        http_url = f"http://{hostname}/{rel}"
-        https_url = f"https://{hostname}/{rel}"
-        http_res = _http_get(http_url, timeout=timeout, auth=(user_id, password), verify_ssl=verify_ssl)
-        https_res = _http_get(https_url, timeout=timeout, auth=(user_id, password), verify_ssl=verify_ssl)
-        results[label] = {"http": http_res, "https": https_res}
+    for label, rel in test_cases.items():
+        urls = {
+            "http": f"http://{hostname}/{rel}",
+            "https": f"https://{hostname}/{rel}",
+        }
+        results[label] = {}
+        for proto, url in urls.items():
+            results[label][proto] = _http_get(
+                url, timeout=timeout, auth=(user_id, password), verify_ssl=verify_ssl
+            )
 
     ok = any(v["http"]["ok"] or v["https"]["ok"] for v in results.values())
-    return {"ok": ok, "error": None if ok else "XSI-Actions checks failed", "details": results}
+    return {
+        "ok": ok,
+        "error": None if ok else "XSI-Actions checks failed",
+        "details": results,
+    }
 
 
-def _apptest_xsi_events(hostname: str, test_data: Dict[str, Any], *, timeout: float, verify_ssl: bool) -> Dict[str, Any]:
+def _apptest_xsi_events(
+    hostname: str, test_data: Dict[str, Any], *, timeout: float, verify_ssl: bool
+) -> Dict[str, Any]:
     user_id = test_data.get("user_id")
     password = test_data.get("password")
     if not user_id or not password:
-        return {"ok": False, "error": "Missing user_id/password in test_data", "details": {}}
+        return {
+            "ok": False,
+            "error": "Missing user_id/password in test_data",
+            "details": {},
+        }
 
     rel = "com.broadsoft.xsi-events/v2.0/versions"
     http_url = f"http://{hostname}/{rel}"
     https_url = f"https://{hostname}/{rel}"
 
-    http_res = _http_get(http_url, timeout=timeout, auth=(user_id, password), verify_ssl=verify_ssl)
-    https_res = _http_get(https_url, timeout=timeout, auth=(user_id, password), verify_ssl=verify_ssl)
+    http_res = _http_get(
+        http_url, timeout=timeout, auth=(user_id, password), verify_ssl=verify_ssl
+    )
+    https_res = _http_get(
+        https_url, timeout=timeout, auth=(user_id, password), verify_ssl=verify_ssl
+    )
     ok = http_res["ok"] or https_res["ok"]
-    return {"ok": ok, "error": None if ok else "XSI-Events check failed", "details": {"http": http_res, "https": https_res}}
+    return {
+        "ok": ok,
+        "error": None if ok else "XSI-Events check failed",
+        "details": {"http": http_res, "https": https_res},
+    }
 
 
 def _apptest_ocs(hostname: str, test_data: Dict[str, Any]) -> Dict[str, Any]:
-    if not HAVE_OCI:
-        return {"ok": False, "error": "Oci module not available", "details": {}}
     try:
         my_oci = Oci()  # type: ignore
         my_oci.ocs = hostname
         my_oci.user_name = test_data.get("user_id")
         my_oci.password = test_data.get("password")
         ok = bool(my_oci.connect())
-        return {"ok": ok, "error": None if ok else "OpenClientServer connect() returned False", "details": {}}
-    except Exception as exc:
+        return {
+            "ok": ok,
+            "error": None if ok else "OpenClientServer connect() returned False",
+            "details": {},
+        }
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "details": {}}
 
 
-def _apptest_oci_over_soap(hostname: str, test_data: Dict[str, Any], *, timeout: float, verify_ssl: bool) -> Dict[str, Any]:
+def _apptest_oci_over_soap(
+    hostname: str, test_data: Dict[str, Any], *, timeout: float, verify_ssl: bool
+) -> Dict[str, Any]:
+    """
+    Oci over Soap test
+    """
     if not HAVE_ZEEP:
         return {"ok": False, "error": "zeep not available", "details": {}}
 
     user_id = test_data.get("user_id")
     password = test_data.get("password")
     if not user_id or not password:
-        return {"ok": False, "error": "Missing user_id/password in test_data", "details": {}}
+        return {
+            "ok": False,
+            "error": "Missing user_id/password in test_data",
+            "details": {},
+        }
 
     wsdl = f"https://{hostname}/webservice/services/ProvisioningService?wsdl"
 
@@ -254,11 +320,17 @@ def _apptest_oci_over_soap(hostname: str, test_data: Dict[str, Any], *, timeout:
         transport = Transport(session=sess, timeout=timeout)  # type: ignore
         settings = Settings(strict=False, xml_huge_tree=True)  # type: ignore
         client = Client(wsdl=wsdl, transport=transport, settings=settings)  # type: ignore
-    except Exception as exc:
-        return {"ok": False, "error": f"SOAP client init failed: {type(exc).__name__}: {exc}", "details": {}}
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return {
+            "ok": False,
+            "error": f"SOAP client init failed: {type(exc).__name__}: {exc}",
+            "details": {},
+        }
 
     # LoginRequest22V5
-    session_id = requests.utils.default_user_agent()  # just a unique-ish string; your original used uuid
+    session_id = (
+        requests.utils.default_user_agent()
+    )  # just a unique-ish string; your original used uuid
     login_request = f"""<?xml version="1.0" encoding="ISO-8859-1"?>
 <BroadsoftDocument protocol="OCI" xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <sessionId xmlns="">{session_id}</sessionId>
@@ -277,13 +349,27 @@ def _apptest_oci_over_soap(hostname: str, test_data: Dict[str, Any], *, timeout:
         root = ET.fromstring(xml1)
         command = root.find("command")
         if command is None:
-            return {"ok": False, "error": "Login response missing <command>", "details": {"login_raw": resp}}
-        xsi_type = command.attrib.get("{http://www.w3.org/2001/XMLSchema-instance}type", "")
+            return {
+                "ok": False,
+                "error": "Login response missing <command>",
+                "details": {"login_raw": resp},
+            }
+        xsi_type = command.attrib.get(
+            "{http://www.w3.org/2001/XMLSchema-instance}type", ""
+        )
         if "Error" in xsi_type:
             summary = command.findtext("summaryEnglish")
-            return {"ok": False, "error": f"Login failed: {summary or xsi_type}", "details": {"login_raw": resp}}
-    except Exception as exc:
-        return {"ok": False, "error": f"Login error: {type(exc).__name__}: {exc}", "details": {}}
+            return {
+                "ok": False,
+                "error": f"Login failed: {summary or xsi_type}",
+                "details": {"login_raw": resp},
+            }
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return {
+            "ok": False,
+            "error": f"Login error: {type(exc).__name__}: {exc}",
+            "details": {},
+        }
 
     # UserGetRequest23
     user_get_request = f"""<?xml version="1.0" encoding="ISO-8859-1"?>
@@ -300,17 +386,35 @@ def _apptest_oci_over_soap(hostname: str, test_data: Dict[str, Any], *, timeout:
         root2 = ET.fromstring(xml2)
         command2 = root2.find("command")
         if command2 is None:
-            return {"ok": False, "error": "UserGet response missing <command>", "details": {"user_get_raw": resp2}}
-        xsi_type2 = command2.attrib.get("{http://www.w3.org/2001/XMLSchema-instance}type", "")
+            return {
+                "ok": False,
+                "error": "UserGet response missing <command>",
+                "details": {"user_get_raw": resp2},
+            }
+        xsi_type2 = command2.attrib.get(
+            "{http://www.w3.org/2001/XMLSchema-instance}type", ""
+        )
         if "Error" in xsi_type2:
             summary2 = command2.findtext("summaryEnglish")
-            return {"ok": False, "error": f"UserGetRequest23 failed: {summary2 or xsi_type2}", "details": {"user_get_raw": resp2}}
+            return {
+                "ok": False,
+                "error": f"UserGetRequest23 failed: {summary2 or xsi_type2}",
+                "details": {"user_get_raw": resp2},
+            }
         # Example extraction
         bw_user_id = command2.findtext("userId")
         phone_number = command2.findtext("phoneNumber")
-        return {"ok": True, "error": None, "details": {"userId": bw_user_id, "phoneNumber": phone_number}}
-    except Exception as exc:
-        return {"ok": False, "error": f"UserGet error: {type(exc).__name__}: {exc}", "details": {}}
+        return {
+            "ok": True,
+            "error": None,
+            "details": {"userId": bw_user_id, "phoneNumber": phone_number},
+        }
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return {
+            "ok": False,
+            "error": f"UserGet error: {type(exc).__name__}: {exc}",
+            "details": {},
+        }
 
 
 # Map names to functions. For “manual” ones, just flag manual=True.
@@ -320,23 +424,56 @@ _APPTESTS = {
     "Xsi-Actions": _apptest_xsi_actions,
     "Xsi-Events": _apptest_xsi_events,
     "OCIOverSoap": _apptest_oci_over_soap,
-    "BWCallCenter": lambda h, td, **kw: {"ok": False, "error": "manual", "details": {"manual": True}},
-    "BWReceptionist": lambda h, td, **kw: {"ok": False, "error": "manual", "details": {"manual": True}},
-    "OCIFiles": lambda h, td, **kw: {"ok": False, "error": "manual", "details": {"manual": True}},
-    "BWCallSettingsWeb": lambda h, td, **kw: {"ok": False, "error": "manual", "details": {"manual": True}},
-    "AuthenticationService": lambda h, td, **kw: {"ok": False, "error": "manual", "details": {"manual": True}},
-    "CommPilot": lambda h, td, **kw: {"ok": False, "error": "manual", "details": {"manual": True}},
-    "ModeratorClientApp": lambda h, td, **kw: {"ok": False, "error": "manual", "details": {"manual": True}},
-    "PublicReporting": lambda h, td, **kw: {"ok": False, "error": "manual", "details": {"manual": True}},
-    "NotificationPushServer": lambda h, td, **kw: {"ok": False, "error": "manual", "details": {"manual": True}},
+    "BWCallCenter": lambda h, td, **kw: {
+        "ok": False,
+        "error": "manual",
+        "details": {"manual": True},
+    },
+    "BWReceptionist": lambda h, td, **kw: {
+        "ok": False,
+        "error": "manual",
+        "details": {"manual": True},
+    },
+    "OCIFiles": lambda h, td, **kw: {
+        "ok": False,
+        "error": "manual",
+        "details": {"manual": True},
+    },
+    "BWCallSettingsWeb": lambda h, td, **kw: {
+        "ok": False,
+        "error": "manual",
+        "details": {"manual": True},
+    },
+    "AuthenticationService": lambda h, td, **kw: {
+        "ok": False,
+        "error": "manual",
+        "details": {"manual": True},
+    },
+    "CommPilot": lambda h, td, **kw: {
+        "ok": False,
+        "error": "manual",
+        "details": {"manual": True},
+    },
+    "ModeratorClientApp": lambda h, td, **kw: {
+        "ok": False,
+        "error": "manual",
+        "details": {"manual": True},
+    },
+    "PublicReporting": lambda h, td, **kw: {
+        "ok": False,
+        "error": "manual",
+        "details": {"manual": True},
+    },
+    "NotificationPushServer": lambda h, td, **kw: {
+        "ok": False,
+        "error": "manual",
+        "details": {"manual": True},
+    },
 }
 
 
-@shared_task(name="apptest.run", bind=True)
-def apptest_run(self, data: Dict[str, Any], **options) -> Dict[str, Any]:
-    # Robust option parsing: accept kwargs without colliding with positionals
-    timeout = float(options.get("timeout", 5.0))
-    verify_ssl = bool(options.get("verify_ssl", True))
+@shared_task(name="apptest.run")
+def apptest_run(data: Dict[str, Any], **options) -> Dict[str, Any]:
     """
     Run application tests per host.
 
@@ -364,6 +501,10 @@ def apptest_run(self, data: Dict[str, Any], **options) -> Dict[str, Any]:
         }
       }
     """
+    # Robust option parsing: accept kwargs without colliding with positionals
+    timeout = float(options.get("timeout", 5.0))
+    verify_ssl = bool(options.get("verify_ssl", True))
+
     started = time.time()
     results: Dict[str, Dict[str, Any]] = {}
     apps_attempted = 0
@@ -378,17 +519,32 @@ def apptest_run(self, data: Dict[str, Any], **options) -> Dict[str, Any]:
             apps_attempted += 1
             fn = _APPTESTS.get(app_name)
             if not fn:
-                per_host[app_name] = {"ok": False, "error": "apptest missing", "details": {}}
+                per_host[app_name] = {
+                    "ok": False,
+                    "error": "apptest missing",
+                    "details": {},
+                }
                 continue
 
             try:
                 # pass timeout/verify_ssl only to functions that accept them
-                if fn in (_apptest_dms, _apptest_xsi_actions, _apptest_xsi_events, _apptest_oci_over_soap):
-                    per_host[app_name] = fn(hostname, test_data, timeout=timeout, verify_ssl=verify_ssl)  # type: ignore[arg-type]
+                if fn in (
+                    _apptest_dms,
+                    _apptest_xsi_actions,
+                    _apptest_xsi_events,
+                    _apptest_oci_over_soap,
+                ):
+                    per_host[app_name] = fn(
+                        hostname, test_data, timeout=timeout, verify_ssl=verify_ssl
+                    )  # type: ignore[arg-type]
                 else:
                     per_host[app_name] = fn(hostname, test_data)  # type: ignore[misc]
-            except Exception as exc:
-                per_host[app_name] = {"ok": False, "error": f"{type(exc).__name__}: {exc}", "details": {}}
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                per_host[app_name] = {
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "details": {},
+                }
 
         results[hostname] = per_host
 
@@ -397,23 +553,21 @@ def apptest_run(self, data: Dict[str, Any], **options) -> Dict[str, Any]:
             "hosts": len(data),
             "apps_attempted": apps_attempted,
             "duration_sec": round(time.time() - started, 2),
-            "features": {"have_oci": HAVE_OCI, "have_zeep": HAVE_ZEEP},
+            "features": {"have_zeep": HAVE_ZEEP},
         },
         "results": results,
     }
-
-
 
 
 def _test_tcp(host: str, port: int, timeout: float) -> Tuple[bool, Optional[str]]:
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True, None
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         return False, f"{type(exc).__name__}: {exc}"
 
 
-def _test_tls(
+def _test_tls_orig(
     host: str,
     port: int,
     timeout: float,
@@ -421,7 +575,13 @@ def _test_tls(
 ) -> Dict[str, Any]:
     """
     Try a TLS handshake and pull cert CN + notAfter.
-    Returns: {"loaded": bool, "cn": str|None, "not_after": str|None, "expires_utc": str|None, "error": str|None}
+    Returns: {
+        "loaded": bool,
+        "cn": str|None,
+        "not_after": str|None,
+        "expires_utc": str|None,
+        "error": str|None
+    }
     """
     if verify_ssl:
         context = ssl.create_default_context()
@@ -433,8 +593,13 @@ def _test_tls(
             with context.wrap_socket(sock, server_hostname=host) as ssock:
                 cert = ssock.getpeercert()
                 if not cert:
-                    return {"loaded": False, "cn": None, "not_after": None, "expires_utc": None, "error": "No certificate"}
-                from datetime import datetime, timezone
+                    return {
+                        "loaded": False,
+                        "cn": None,
+                        "not_after": None,
+                        "expires_utc": None,
+                        "error": "No certificate",
+                    }
                 subject = dict(x[0] for x in cert.get("subject", []))
                 cn = subject.get("commonName")
 
@@ -446,12 +611,112 @@ def _test_tls(
                         dt = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
                         dt = dt.replace(tzinfo=timezone.utc)
                         expires_utc = dt.isoformat()
-                    except Exception:
+                    except Exception:  # pylint: disable=broad-exception-caught
                         expires_utc = None
 
-                return {"loaded": True, "cn": cn, "not_after": not_after, "expires_utc": expires_utc, "error": None}
-    except Exception as exc:
-        return {"loaded": False, "cn": None, "not_after": None, "expires_utc": None, "error": f"{type(exc).__name__}: {exc}"}
+                return {
+                    "loaded": True,
+                    "cn": cn,
+                    "not_after": not_after,
+                    "expires_utc": expires_utc,
+                    "error": None,
+                }
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return {
+            "loaded": False,
+            "cn": None,
+            "not_after": None,
+            "expires_utc": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _test_tls(
+    host: str,
+    port: int,
+    timeout: float,
+    verify_ssl: bool,
+) -> Dict[str, Any]:
+    """
+    Try a TLS handshake and pull cert CN + notAfter + issuer + serial number.
+    Returns:
+      {
+        "loaded": bool,
+        "cn": str|None,
+        "not_after": str|None,
+        "expires_utc": str|None,
+        "issuer": str|None,
+        "serial_number": str|None,
+        "error": str|None
+      }
+    """
+    if verify_ssl:
+        context = ssl.create_default_context()
+    else:
+        context = ssl._create_unverified_context()
+
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            # SNI with server_hostname is fine even when verify_ssl=False
+            with context.wrap_socket(sock, server_hostname=host) as ssock:
+                cert = ssock.getpeercert()
+                if not cert:
+                    return {
+                        "loaded": False,
+                        "cn": None,
+                        "not_after": None,
+                        "expires_utc": None,
+                        "issuer": None,
+                        "serial_number": None,
+                        "error": "No certificate",
+                    }
+
+                # Subject CN
+                subject = dict(x[0] for x in cert.get("subject", []))
+                cn = subject.get("commonName")
+
+                # Issuer (flattened)
+                issuer_kv = dict(x[0] for x in cert.get("issuer", []))
+                issuer = (
+                    ", ".join(f"{k}={v}" for k, v in issuer_kv.items())
+                    if issuer_kv
+                    else None
+                )
+
+                # Serial number (hex string, if provided by Python/OpenSSL)
+                serial_number = cert.get("serialNumber")
+
+                # notAfter + ISO8601 UTC
+                not_after = cert.get("notAfter")
+                expires_utc = None
+                if not_after:
+                    try:
+                        dt = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
+                        dt = dt.replace(tzinfo=timezone.utc)
+                        expires_utc = dt.isoformat()
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        expires_utc = None
+
+                return {
+                    "loaded": True,
+                    "cn": cn,
+                    "not_after": not_after,
+                    "expires_utc": expires_utc,
+                    "issuer": issuer,
+                    "serial_number": serial_number,
+                    "error": None,
+                }
+
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return {
+            "loaded": False,
+            "cn": None,
+            "not_after": None,
+            "expires_utc": None,
+            "issuer": None,
+            "serial_number": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def _process_host(
@@ -467,7 +732,15 @@ def _process_host(
       {
         "ports": {
           "80":  {"open": true,  "error": null},
-          "443": {"open": true,  "error": null, "tls": {"loaded": true, "cn": "...", "not_after": "...", "expires_utc": "..."}},
+          "443": {
+            "open": true,
+            "error": null,
+            "tls": {
+                "loaded": true,
+                "cn": "...",
+                "not_after": "...",
+                "expires_utc": "..."}
+            },
           "2208":{"open": false, "error": "ConnectionRefusedError: ..."}
         },
         "failed_ports": [2208, ...]
@@ -492,9 +765,8 @@ def _process_host(
     return results
 
 
-@shared_task(name="porttest.run", bind=True)
+@shared_task(name="porttest.run")
 def porttest_run(
-    self,
     data: Dict[str, Any],
     **options,
 ) -> Dict[str, Any]:
@@ -549,21 +821,27 @@ def porttest_run(
         futures = {}
         for host, info in data.items():
             ports_checked += len(info.get("ports", []))
-            futures[pool.submit(
-                _process_host,
-                host,
-                info,
-                timeout=timeout,
-                tls_ports=tls_ports,
-                verify_ssl=verify_ssl
-            )] = host
+            futures[
+                pool.submit(
+                    _process_host,
+                    host,
+                    info,
+                    timeout=timeout,
+                    tls_ports=tls_ports,
+                    verify_ssl=verify_ssl,
+                )
+            ] = host
 
         for fut in as_completed(futures):
             host = futures[fut]
             try:
                 results[host] = fut.result()
-            except Exception as exc:
-                results[host] = {"ports": {}, "failed_ports": [], "error": f"{type(exc).__name__}: {exc}"}
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                results[host] = {
+                    "ports": {},
+                    "failed_ports": [],
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
 
     return {
         "summary": {
@@ -575,4 +853,3 @@ def porttest_run(
         },
         "results": results,
     }
-
