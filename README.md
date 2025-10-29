@@ -1,6 +1,25 @@
 # remote_test
 api and celery tasks for remote test execution
 
+# architecture
+
+This is intended to run on a server node that is not
+on your local network to test connectivity back to
+your network.
+
+This system is a simple flask app that enques tasks for
+celery and provides the task status.
+
+The celery app contains a series of tests it can execute.
+
+Data flow is as follows:
+
+Web client POST /task to app.py
+app.py queues celery task, and returns task_id
+celery_app.py runs task from tasks.py and stores result
+Web client GET /task/<task_id>
+app.py pulls task status from celery and returns status
+
 # tests
  - dns.check_records
    - looks for A records to match a set of states
