@@ -1,0 +1,9 @@
+redis
+flask
+celery
+gunicorn
+dnspython
+zeep
+lxml
+requests
+
